@@ -1,0 +1,337 @@
+--- SampleApp.c	2017-08-04 12:06:43.072916594 +0800
++++ ../comperation/SampleApp.c	2017-08-04 12:02:14.069451555 +0800
+@@ -22,7 +22,7 @@
+   its documentation for any purpose.
+ 
+   YOU FURTHER ACKNOWLEDGE AND AGREE THAT THE SOFTWARE AND DOCUMENTATION ARE
+-  PROVIDED “AS IS” WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED,
++  PROVIDED “AS IS?WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+   INCLUDING WITHOUT LIMITATION, ANY WARRANTY OF MERCHANTABILITY, TITLE,
+   NON-INFRINGEMENT AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL
+   TEXAS INSTRUMENTS OR ITS LICENSORS BE LIABLE OR OBLIGATED UNDER CONTRACT,
+@@ -71,7 +71,9 @@
+ #include "hal_lcd.h"
+ #include "hal_led.h"
+ #include "hal_key.h"
+-
++#include "MT_UART.h"
++#include "MT.h"
++void SampleApp_SerialCMD(mtOSALSerialData_t *cmdMsg);
+ /*********************************************************************
+  * MACROS
+  */
+@@ -92,7 +94,8 @@
+ const cId_t SampleApp_ClusterList[SAMPLEAPP_MAX_CLUSTERS] =
+ {
+   SAMPLEAPP_PERIODIC_CLUSTERID,
+-  SAMPLEAPP_FLASH_CLUSTERID
++  SAMPLEAPP_REPLY_CLUSTERID,
++  SAMPLEAPP_SERIAL_CLUSTERID 
+ };
+ 
+ const SimpleDescriptionFormat_t SampleApp_SimpleDesc =
+@@ -134,20 +137,25 @@
+ 
+ afAddrType_t SampleApp_Periodic_DstAddr;
+ afAddrType_t SampleApp_Flash_DstAddr;
++afAddrType_t SampleApp_pointopoint;
+ 
+ aps_Group_t SampleApp_Group;
+-
++uint8 net_work_num=0;
+ uint8 SampleAppPeriodicCounter = 0;
+ uint8 SampleAppFlashCounter = 0;
+-
++uint16 aimaddr=0xfff0;
++void * head=NULL;
++#define MAX_NETWORK 2
++#define BOARDCAST "please report your address\n"
+ /*********************************************************************
+  * LOCAL FUNCTIONS
+  */
+ void SampleApp_HandleKeys( uint8 shift, uint8 keys );
+ void SampleApp_MessageMSGCB( afIncomingMSGPacket_t *pckt );
+ void SampleApp_SendPeriodicMessage( void );
++void SampleApp_Sendpointopoint( uint16 addr, uint16 len, uint8 *buf,uint16 cID);
+ void SampleApp_SendFlashMessage( uint16 flashTime );
+-
++void dataprocess(void ** q_ptr,uint16 * addr);
+ /*********************************************************************
+  * NETWORK LAYER CALLBACKS
+  */
+@@ -155,7 +163,25 @@
+ /*********************************************************************
+  * PUBLIC FUNCTIONS
+  */
+-
++ void dataprocess(void ** q_ptr,uint16 * addr)
++{
++  bool flag=0;
++  void * list;
++  if(*q_ptr != NULL)
++        for ( list = *q_ptr; OSAL_MSG_NEXT( list ) != NULL; list = OSAL_MSG_NEXT( list ) )
++                if(*addr == *(uint16 *)list)
++                      {    
++                          flag=1;
++                          break;
++                      }  
++  if(flag==0)
++ {  
++    net_work_num+=1;
++    list=osal_msg_allocate(16);
++    *(uint16 *)list=*addr;
++    osal_msg_enqueue(q_ptr,list);
++ }
++}
+ /*********************************************************************
+  * @fn      SampleApp_Init
+  *
+@@ -170,12 +196,82 @@
+  *
+  * @return  none
+  */
++void SampleApp_Sendpointopoint( uint16 addr, uint16 len, uint8 *buf,uint16 cID)
++{  
++   SampleApp_pointopoint.addr.shortAddr = addr;
++   
++   if(AF_DataRequest( &SampleApp_pointopoint, &SampleApp_epDesc,
++                       cID,
++                       len,
++                       buf,
++                       &SampleApp_TransID,
++                       AF_DISCV_ROUTE,
++                       AF_DEFAULT_RADIUS )==afStatus_SUCCESS)
++  {      
++  }
++  else
++  {
++    // Error occurred in request to send.
++  }
++}
++#ifdef COORDINATOR 
++void SampleApp_SerialCMD(mtOSALSerialData_t *cmdMsg)
++{
++ uint8 * temp[2] ={	"connect 1","connect 2"};
++ uint16  cid;
++ uint8 numtemp[4];
++ uint8 i,len,*str=NULL;     
++         str=cmdMsg->msg;       
++         len=*str;                 
++        for(i=1;i<=len;i++)
++            HalUARTWrite(0,str+i,1 ); 
++            HalUARTWrite(0,"\n",1 );
++        if(osal_memcmp(str+1,temp[0],9))
++        {
++            aimaddr=*(uint16 *)head;
++            _itoa(aimaddr,numtemp,16);
++              for(i=0;i<sizeof(numtemp);i++)
++                    HalUARTWrite(0,numtemp,1);
++                    HalUARTWrite(0,"\n",1);
++              cid=SAMPLEAPP_PERIODIC_CLUSTERID;      
++        }    
++        else if(osal_memcmp(str+1,temp[1],9))
++        {    aimaddr=*(uint16 *)OSAL_MSG_NEXT(head);
++             _itoa(aimaddr,numtemp,16);
++             for(i=0;i<sizeof(numtemp);i++)
++                    HalUARTWrite(0,numtemp,1);
++                    HalUARTWrite(0,"\n",1);
++            cid=SAMPLEAPP_PERIODIC_CLUSTERID;
++        }    
++        else
++        {   
++            cid=SAMPLEAPP_SERIAL_CLUSTERID;
++        }                   	
++        SampleApp_Sendpointopoint(aimaddr,len,str+1,cid);
++}
++#elif ENDDEVICE
++void SampleApp_SerialCMD(mtOSALSerialData_t *cmdMsg)
++{
++ uint8 i,len,*str=NULL;     
++         str=cmdMsg->msg;       
++         len=*str;                 
++        
++        for(i=1;i<=len;i++)
++            HalUARTWrite(0,str+i,1 ); 
++            HalUARTWrite(0,"\n",1 );
++        SampleApp_Sendpointopoint(aimaddr,len,str+1,SAMPLEAPP_SERIAL_CLUSTERID);           	
++}
++#endif
+ void SampleApp_Init( uint8 task_id )
+ {
+   SampleApp_TaskID = task_id;
+   SampleApp_NwkState = DEV_INIT;
+   SampleApp_TransID = 0;
+ 
++  
++  
++  MT_UartInit();
++  MT_UartRegisterTaskID(task_id);
+   // Device hardware initialization can be added here or in main() (Zmain.c).
+   // If the hardware is application specific - add it here.
+   // If the hardware is other parts of the device add it in main().
+@@ -197,7 +293,9 @@
+   //  start the device.
+   ZDOInitDevice(0);
+ #endif
+-
++   SampleApp_pointopoint.addrMode = (afAddrMode_t)Addr16Bit;
++   SampleApp_pointopoint.endPoint = SAMPLEAPP_ENDPOINT;
++   SampleApp_pointopoint.addr.shortAddr = 0x0000;
+   // Setup for the periodic message's destination address
+   // Broadcast to everyone
+   SampleApp_Periodic_DstAddr.addrMode = (afAddrMode_t)AddrBroadcast;
+@@ -270,20 +368,24 @@
+         // Received whenever the device changes state in the network
+         case ZDO_STATE_CHANGE:
+           SampleApp_NwkState = (devStates_t)(MSGpkt->hdr.status);
+-          if ( (SampleApp_NwkState == DEV_ZB_COORD)
+-              || (SampleApp_NwkState == DEV_ROUTER)
+-              || (SampleApp_NwkState == DEV_END_DEVICE) )
++          if ( (SampleApp_NwkState == DEV_ZB_COORD))
++            // || (SampleApp_NwkState == DEV_ROUTER))
++             // || (SampleApp_NwkState == DEV_END_DEVICE) )
+           {
+             // Start sending the periodic message in a regular interval.
+-            osal_start_timerEx( SampleApp_TaskID,
+-                              SAMPLEAPP_SEND_PERIODIC_MSG_EVT,
+-                              SAMPLEAPP_SEND_PERIODIC_MSG_TIMEOUT );
++              osal_start_timerEx( SampleApp_TaskID,
++                               SAMPLEAPP_SEND_PERIODIC_MSG_EVT,
++                                SAMPLEAPP_SEND_PERIODIC_MSG_TIMEOUT );
+           }
+           else
+           {
+             // Device is no longer in the network
+           }
+           break;
++        case CMD_SERIAL_MSG:
++          SampleApp_SerialCMD((mtOSALSerialData_t *)MSGpkt);
++          break;
++          
+ 
+         default:
+           break;
+@@ -308,6 +410,7 @@
+     SampleApp_SendPeriodicMessage();
+ 
+     // Setup to send message again in normal period (+ a little jitter)
++    if(net_work_num <= MAX_NETWORK )
+     osal_start_timerEx( SampleApp_TaskID, SAMPLEAPP_SEND_PERIODIC_MSG_EVT,
+         (SAMPLEAPP_SEND_PERIODIC_MSG_TIMEOUT + (osal_rand() & 0x00FF)) );
+ 
+@@ -384,22 +487,67 @@
+  *
+  * @return  none
+  */
++
+ void SampleApp_MessageMSGCB( afIncomingMSGPacket_t *pkt )
+ {
+-  uint16 flashTime;
+-
++  uint16 netaddr;
++  uint8 i,len;
++  uint8 * temp[3]= {		
++                      BOARDCAST,
++                      "connect 1",
++                      "connect 2" 
++                    };
++  uint8 numtemp[4];
++  len=pkt->cmd.DataLength;
+   switch ( pkt->clusterId )
+-  {
++  { 
++  	  
+     case SAMPLEAPP_PERIODIC_CLUSTERID:
+-      break;
+-
+-    case SAMPLEAPP_FLASH_CLUSTERID:
+-      flashTime = BUILD_UINT16(pkt->cmd.Data[1], pkt->cmd.Data[2] );
+-      HalLedBlink( HAL_LED_4, 4, 50, (flashTime / 4) );
+-      break;
++          if( len == osal_strlen(temp[0]))
++              {  
++                 if(osal_memcmp(pkt->cmd.Data,temp[0],osal_strlen(temp[0]))) 
++                      {         
++                                
++                      		for(i=0;i<len;i++)
++                          		HalUARTWrite(0,&pkt->cmd.Data[i],1);
++                                HalUARTWrite(0,"\n",1);
++                  	        netaddr=NLME_GetShortAddr();
++                  	        SampleApp_Sendpointopoint(0x0000,
++                                                          sizeof(netaddr),
++                                                          (uint8 *)&netaddr,
++                                                          SAMPLEAPP_REPLY_CLUSTERID);
++                              
++                      } 
++              }
++              else if( len == osal_strlen(temp[1]))
++              {  
++                      if(osal_memcmp(pkt->cmd.Data,temp[1],osal_strlen(temp[1]))||
++                         osal_memcmp(pkt->cmd.Data,temp[2],osal_strlen(temp[2])))
++                      {
++                      		for(i=0;i<len;i++)
++                          		HalUARTWrite(0,&pkt->cmd.Data[i],1);
++                                        HalUARTWrite(0,"\n",1);
++                  			aimaddr=0x0000;
++                      }
++              }
++    //Èç¹û½Óµ½µ½connect 1µÄ¹ã²¥£¬½«ÉèÖÃÄ¿±êµØÖ·ÎªÖ¸¶¨Öµ£¬ÕâÀïÎª0x0000
++    //ÕâÀï½âÊÍÏÂ£¬Èç¹ûµÚÒ»´Î½ÓÊÕµ½µÄ¹ã²¥ÊÇhello world£¬½«»Ø¸´×ÔÉíÍøÂçµØÖ·¸øÐ­µ÷Æ÷    	        
++           break;
++     
++     case SAMPLEAPP_REPLY_CLUSTERID:
++              _itoa(*(uint16 *)pkt->cmd.Data,numtemp,16);
++              for(i=0;i<sizeof(numtemp);i++)
++                    HalUARTWrite(0,numtemp,1);
++                    HalUARTWrite(0,"\n",1);
++              dataprocess(&head,(uint16 *)pkt->cmd.Data); 
++     	      break;
++     case SAMPLEAPP_SERIAL_CLUSTERID:
++              for(i=0;i<len;i++)
++                    HalUARTWrite(0,&pkt->cmd.Data[i],1);
++                    HalUARTWrite(0,"\n",1);
++     		    break;
+   }
+ }
+-
+ /*********************************************************************
+  * @fn      SampleApp_SendPeriodicMessage
+  *
+@@ -409,16 +557,16 @@
+  *
+  * @return  none
+  */
+-void SampleApp_SendPeriodicMessage( void )
++void SampleApp_SendPeriodicMessage(void)
+ {
+-  if ( AF_DataRequest( &SampleApp_Periodic_DstAddr, &SampleApp_epDesc,
++   if(AF_DataRequest( &SampleApp_Periodic_DstAddr, &SampleApp_epDesc,
+                        SAMPLEAPP_PERIODIC_CLUSTERID,
+-                       1,
+-                       (uint8*)&SampleAppPeriodicCounter,
++                       osal_strlen(BOARDCAST),
++                       (uint8 *)BOARDCAST,
+                        &SampleApp_TransID,
+                        AF_DISCV_ROUTE,
+-                       AF_DEFAULT_RADIUS ) == afStatus_SUCCESS )
+-  {
++                       AF_DEFAULT_RADIUS )==afStatus_SUCCESS)
++  {      
+   }
+   else
+   {
+@@ -443,7 +591,7 @@
+   buffer[2] = HI_UINT16( flashTime );
+ 
+   if ( AF_DataRequest( &SampleApp_Flash_DstAddr, &SampleApp_epDesc,
+-                       SAMPLEAPP_FLASH_CLUSTERID,
++                       0,
+                        3,
+                        buffer,
+                        &SampleApp_TransID,
+@@ -457,5 +605,3 @@
+   }
+ }
+ 
+-/*********************************************************************
+-*********************************************************************/
